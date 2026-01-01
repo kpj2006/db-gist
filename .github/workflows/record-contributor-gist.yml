@@ -1,0 +1,71 @@
+name: Record contributor in Gist
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  record:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clone gist
+        run: |
+          git clone https://x-access-token:${{ secrets.GIST_TOKEN }}@gist.github.com/499740a475592025478e29d47c7138da.git gist-data
+
+      - name: Update contributor TOML
+        run: |
+          set -e
+          cd gist-data
+
+          USER="${{ github.event.pull_request.user.login }}"
+          REPO="${{ github.repository }}"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          MERGED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          FILE="contributor__${USER}.toml"
+
+          if [ ! -f "$FILE" ]; then
+            cat > "$FILE" <<EOF
+schema_version = 1
+
+[github]
+login = "$USER"
+
+stats.total_prs = 1
+
+[[prs]]
+repo = "$REPO"
+pr_number = $PR_NUMBER
+merged_at = "$MERGED_AT"
+EOF
+          else
+            # Prevent double counting
+            if grep -q "pr_number = $PR_NUMBER" "$FILE"; then
+              echo "PR already recorded. Exiting."
+              exit 0
+            fi
+
+            TOTAL=$(grep "stats.total_prs" "$FILE" | awk '{print $3}')
+            NEW_TOTAL=$((TOTAL + 1))
+            sed -i "s/stats.total_prs = $TOTAL/stats.total_prs = $NEW_TOTAL/" "$FILE"
+
+            cat >> "$FILE" <<EOF
+
+[[prs]]
+repo = "$REPO"
+pr_number = $PR_NUMBER
+merged_at = "$MERGED_AT"
+EOF
+          fi
+
+      - name: Commit and push
+        run: |
+          cd gist-data
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          git add .
+          git commit -m "Record PR #${{ github.event.pull_request.number }} by ${{ github.event.pull_request.user.login }}"
+          git push
